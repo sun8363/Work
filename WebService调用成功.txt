@@ -1,15 +1,29 @@
-﻿package com.hucai.service.WebService;
+package com.hucai.job;
 
 
-import javax.xml.namespace.QName;
-
+import com.alibaba.fastjson.JSON;
+import com.hucai.dao.mapper.OrderMapper;
+import com.hucai.dao.model.PushToScienceLog;
+import com.hucai.model.PrinterBackModel;
+import com.hucai.service.OrderService;
+import com.jsmframe.utils.DateUtil;
 import org.apache.axis.Constants;
 import org.apache.axis.client.Call;
 import org.apache.axis.client.Service;
 import org.apache.axis.encoding.XMLType;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.stereotype.Component;
 
+import javax.annotation.Resource;
+import javax.xml.namespace.QName;
+import java.util.Date;
+import java.util.List;
 
-public class Push {
+@Component(value ="PushToScienceJob" )
+public class PushToScienceJob {
+
+    private static  final Logger logger = LoggerFactory.getLogger(PushToScienceJob.class);
 
     //完整WebService URL
     public final static String endpoint = "http://124.17.26.81/WebService1.asmx";
@@ -17,110 +31,114 @@ public class Push {
     //命名空间
     public final static String targetNamespace = "http://tempuri.org/";
 
-    public final static String	encodingStyle = "utf-8";
+    public final static Service service = new Service();
+    @Resource
+    private OrderService orderService;
+    @Resource
+    private OrderMapper orderMapper;
 
+    public void run(){
 
-    public static void main(String[] args) {
-        String JsonStr = "{\"SM\":\"基础会计学(第三版)\",\"ISBN\":1111112222,\"YDID\":\"yd19060080\",\"XTH\":\"01 TP - 7651· 3101\",\"BC\":\"3101\",\"Printer\":\"a2\",\"DeliveryDate\":\"2019 - 06 - 10\",\"KFStyleBook\":0,\"deliveryNum\":795,\"Address\":\"河北廊坊固安大清河经济开发区固东沿线路北，固安县宏贤达科技发展有限公司院内3号库 / 刘锦亮 / 库房（ 总社）（ 下午3点前送到） / 13366123551\",\"Remark\":\"测试数据\",\"BalingNum\":5}";
-
-        String DesEncrypt = DesEncrypt(JsonStr);
-        System.out.println("加密Jsonw为 :"+DesEncrypt);
-        String Push = PushData(DesEncrypt);
-        System.out.println("推送返回结果为 ："+ Push);
-        String DesDecrypt = DesDecrypt(Push);
-        System.out.println("回显数据为 :"+ DesDecrypt);
-
-
-
+        try{
+            List<PrinterBackModel> printerBackModels = orderService.pushToScienceList();//推送订单
+            if ( printerBackModels ==null || printerBackModels.size() == 0 ){
+                return;
+            }
+                for (PrinterBackModel model : printerBackModels) {
+                    int scienceLog = orderMapper.findPushToScienceLog(model.HC_OrderId);
+                    if (scienceLog == 0){
+                        String JsonStr = JSON.toJSONString(model);
+                        String enStr = desEncrypt(JsonStr); //加密
+                        String data = pushData(enStr);  //推送加密字符串
+                        String encrypt = desDecrypt(data);
+                        PushToScienceLog log = new PushToScienceLog();
+                        log.HC_OrderId = model.HC_OrderId;
+                        log.createTime = DateUtil.currentDate();
+                        log.JsonStr = JsonStr;
+                        log.DesEncryptStr = enStr;
+                        log.eMsg = encrypt;
+                        log.eCode = "E";
+                        if (encrypt.equals("推送成功")) {
+                            log.eCode = "S";
+                            logger.info("推送成功", DateUtil.format(new Date(), DateUtil.DATETIME_PATTERN));
+                        } else {
+                            logger.info("推送失败", DateUtil.format(new Date(), DateUtil.DATETIME_PATTERN));
+                        }
+                            orderMapper.addPushToScienceLog(log);
+                        }else {
+                        logger.info("推送订单数据重复  ："+model.HC_OrderId);
+                    }
+                }
+            }catch (Exception e){
+                logger.error("没有数据" +  " " + e );
+        }
     }
 
-
-    public static String DesEncrypt(String Json){
-
-		//创建axis.client.Service 客户端
-        Service service = new Service();
-        String method = "DesEncrypt";
-        String JsonStr = "{\"SM\":\"基础会计学(第三版)\",\"ISBN\":1111112222,\"YDID\":\"yd19060080\",\"XTH\":\"01 TP - 7651· 3101\",\"BC\":\"3101\",\"Printer\":\"a2\",\"DeliveryDate\":\"2019 - 06 - 10\",\"KFStyleBook\":5,\"deliveryNum\":795,\"Address\":\"河北廊坊固安大清河经济开发区固东沿线路北，固安县宏贤达科技发展有限公司院内3号库 / 刘锦亮 / 库房（ 总社）（ 下午3点前送到） / 13366123551\",\"Remark\":\"测试数据\",\"BalingNum\":5}";
-        String Jiami = "2ye1erATt+ixec+W93Lr8cOeqFPl83/7343CF3bKh5ahS5MMvHu2clHmzQr6MynECI5hNGIE+5PtZAxXTlIJgujGo89w1NfqYLbXN3Ivn7YPPktHtZ3WtpLPLSTAwEiNWKuVAwmz5PCJdFh5SXrdVgCMl4xXyggTuXJ4nYTwVjxRXtBymu5JblaC/XVqdVnK2/maIIORMgRyHesLv05yA9heGKAWebm/yEsT42zghE7fTgz9zZX1BN+zNy40ZjquD2ZyD+BBubMe/6aurkdu3BAZ1UfSPOp+AYRd/IIqQro0jhio22hrBXIZZS5zkrFAnHqtmvjEGdZy75WyZshRNLT9OvmgQWys0MqzfBcWFdhsBFlEzY1ZXUlsR17Hkt1t76CmsXRj5vmfjl4HTOCWpSiVT4VUIRAa3Eqrn7DzcUYn+7qQ8HLo1+a+Ryo0+WOY6j7llw1uEdYRAoDvnzfTbYIwakilgJhIeUoBJmbBy0UAaD0CLuf14Q==";
-        String Jiemi = "nGdV94VmtUPxRSjMHfOl4olz0sdFGrykavacWPFtuHKGzljyeYnyDAQC49iDyunW+iaK1sJ6ndY=";
+    //加密
+    public static String desEncrypt(String Json){
+        String result ="";
         try{
             Call call = (Call) service.createCall();
-			//命名空间+方法名
             call.setSOAPActionURI(targetNamespace+"DesEncrypt");
-			//设置WebServiceURL
             call.setTargetEndpointAddress(new java.net.URL(endpoint));
-/*            call.setOperationName(new QName(targetNamespace,"PushData"));
-            call.setOperationName(new QName(targetNamespace,"DesDecrypt"));*/
             //设置要调用的方法
             call.setOperationName(new QName(targetNamespace,"DesEncrypt"));
-
-
             call.setUseSOAPAction(true);
-
-			//设置参数   new QName(命名空间, "形参/WebService接口中的参数"),传输类型，输入参数
             call.addParameter(new QName(targetNamespace,"str"), XMLType.XSD_STRING,javax.xml.rpc.ParameterMode.IN);
             call.setReturnType(Constants.XSD_STRING);// 设置返回类型
 
-
-            String result = (String) call.invoke(new String[]{Json});
-            System.out.println("result is:::"+result);
+             result = (String) call.invoke(new Object[]{Json});
+            logger.info("加密数据：  " + result);
             return result;
         }catch (Exception e){
             e.printStackTrace();
-            return null;
+            logger.error("数据加密错误:  " + e);
+            return result;
         }
     }
-    public static String PushData(String Json){
-        Service service = new Service();
 
+    //推送
+    public static String pushData(String Json){
+        String result = "";
         try{
             Call call = (Call) service.createCall();
             call.setSOAPActionURI(targetNamespace+"PushData");
             call.setTargetEndpointAddress(new java.net.URL(endpoint));
-/*            call.setOperationName(new QName(targetNamespace,"PushData"));
-            call.setOperationName(new QName(targetNamespace,"DesDecrypt"));*/
             //设置要调用的方法
             call.setOperationName(new QName(targetNamespace,"PushData"));
-
             call.setUseSOAPAction(true);
-
             call.addParameter(new QName(targetNamespace,"value"), XMLType.XSD_STRING,javax.xml.rpc.ParameterMode.IN);
             call.setReturnType(Constants.XSD_STRING);// 设置返回类型
 
-            String result = (String) call.invoke(new String[]{Json});
-            System.out.println("result is:::"+result);
+            result = (String) call.invoke(new Object[]{Json});
+            logger.info("推送数据：  " + result);
             return result;
         }catch (Exception e){
             e.printStackTrace();
-            return null;
+            logger.error("数据推送错误:  " + e);
+            return result;
         }
     }
 
-
-    public static String DesDecrypt(String str){
-        Service service = new Service();
-
+    //解密
+    public static String desDecrypt(String str){
+        String result = "";
         try{
             Call call = (Call) service.createCall();
             call.setSOAPActionURI(targetNamespace+"DesDecrypt");
             call.setTargetEndpointAddress(new java.net.URL(endpoint));
-/*            call.setOperationName(new QName(targetNamespace,"PushData"));
-            call.setOperationName(new QName(targetNamespace,"DesDecrypt"));*/
             //设置要调用的方法
             call.setOperationName(new QName(targetNamespace,"DesDecrypt"));
-
             call.setUseSOAPAction(true);
-
             call.addParameter(new QName(targetNamespace,"str"), XMLType.XSD_STRING,javax.xml.rpc.ParameterMode.IN);
             call.setReturnType(Constants.XSD_STRING);// 设置返回类型
-
-            String result = (String) call.invoke(new String[]{str});
-            System.out.println("result is:::"+result);
+             result = (String) call.invoke(new Object[]{str});
+            logger.info("返回结果：  " + result);
             return result;
         }catch (Exception e){
             e.printStackTrace();
-            return null;
+            logger.error("解密错误:  " + e);
+            return result;
         }
     }
-
 }
