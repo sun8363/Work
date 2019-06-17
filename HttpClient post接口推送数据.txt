@@ -1,0 +1,167 @@
+package com.hucai.job;
+
+import com.alibaba.fastjson.JSON;
+import com.alibaba.fastjson.JSONObject;
+import com.hucai.dao.mapper.OrderMapper;
+import com.hucai.model.pod.BookBaseInfoList;
+import com.hucai.model.pod.OrderLogisticsLog;
+import com.hucai.model.pod.PushOrderLogModel;
+import com.hucai.service.OrderService;
+import com.jsmframe.utils.DateUtil;
+import org.apache.http.HttpResponse;
+import org.apache.http.HttpStatus;
+import org.apache.http.client.HttpClient;
+import org.apache.http.client.methods.HttpPost;
+import org.apache.http.entity.StringEntity;
+import org.apache.http.impl.client.DefaultHttpClient;
+import org.apache.http.params.CoreConnectionPNames;
+import org.apache.http.util.EntityUtils;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.stereotype.Component;
+
+import javax.annotation.Resource;
+import java.nio.charset.Charset;
+import java.time.LocalDate;
+import java.time.LocalDateTime;
+import java.time.LocalTime;
+import java.time.ZoneId;
+import java.util.List;
+import java.util.UUID;
+
+@Component(value="PushLogisticsJob")
+public class PushLogisticsJob {
+    private static  final Logger logger = LoggerFactory.getLogger(PushLogisticsJob.class);
+    public static final String url = "https://api-callback.fclassroom.com/ud-api-parent/api/v1/hucai/pushOrderLogistics";
+
+    @Resource
+    private OrderService orderService;
+    @Resource
+    private OrderMapper orderMapper;
+
+
+    public void run(){
+
+        try{
+            PushOrderLogModel logModel = new PushOrderLogModel();
+            OrderLogisticsLog logisticsLog = new OrderLogisticsLog();
+            //当前时间与当天12点时间比较 大于true
+            boolean flag = LocalDateTime.now(ZoneId.systemDefault()).isAfter(LocalDateTime.of(LocalDate.now(ZoneId.systemDefault()), LocalTime.NOON));
+            List<BookBaseInfoList> bookBaseInfoLists = orderService.orderLogistics(flag);
+            if (bookBaseInfoLists == null || bookBaseInfoLists.size() == 0){
+                logger.info("没有数据");
+                return;
+            }
+            logModel.PushDate =  DateUtil.currentDate();
+            logModel.PushNo = UUID.randomUUID().toString();
+            logModel.bookBaseInfoList  = bookBaseInfoLists;
+            String Json = JSON.toJSONString(logModel);
+            String result = sendPost(Json);     //推送返回数据
+            JSONObject jsonObject = JSONObject.parseObject(result);
+            String code = jsonObject.getString("code");
+            logisticsLog.eCode = "E";
+            if (code.equals("0")){
+                logisticsLog.eCode = "S";
+            }
+            logisticsLog.pushJsonStr = Json;    //推送数据
+            logisticsLog.eMsg = result;     //返回结果
+            logisticsLog.createTime = DateUtil.currentDate();
+            logisticsLog.logisticsId = System.currentTimeMillis() +bookBaseInfoLists.size()+"";
+
+            if (flag){
+                logisticsLog.logisticsId =logisticsLog.logisticsId + "01";
+            }else {
+                logisticsLog.logisticsId = logisticsLog.logisticsId + "02";
+            }
+            orderMapper.addPushLogisticsLog(logisticsLog);
+            logger.info("推送物流信息成功    " +  logisticsLog.logisticsId);
+        }catch (Exception e){
+            logger.error("推送异常：  " + e );
+        }
+    }
+
+    /*
+    * 推送方法
+    * */
+    private static String sendPost(String data){
+        boolean isSuccess = false;
+        String str="";
+        HttpPost post = null;
+        try{
+            HttpClient httpClient = new DefaultHttpClient();
+            // 设置超时时间
+            httpClient.getParams().setParameter(CoreConnectionPNames.CONNECTION_TIMEOUT, 6000);
+            httpClient.getParams().setParameter(CoreConnectionPNames.SO_TIMEOUT, 6000);
+            post = new HttpPost(url);
+            // 构造消息头
+            post.setHeader("Content-type", "application/json; charset=utf-8");
+            // 构建消息实体
+            StringEntity entity = new StringEntity(data.toString(), Charset.forName("UTF-8"));
+            entity.setContentEncoding("UTF-8");
+            // 发送Json格式的数据请求
+            entity.setContentType("application/json");
+            post.setEntity(entity);
+
+            HttpResponse response  = httpClient.execute(post);
+            // 检验返回码
+            int code = response.getStatusLine().getStatusCode();
+            if (code != HttpStatus.SC_OK){
+                isSuccess = false;
+            }else {
+                int retCode = 0;
+                /**读取服务器返回过来的json字符串数据**/
+                str = EntityUtils.toString(response.getEntity());
+            }
+        }catch (Exception e){
+            e.printStackTrace();
+            isSuccess = false;
+        }finally{
+            if(post != null){
+                try {
+                    post.releaseConnection();
+                    Thread.sleep(500);
+                } catch (InterruptedException e) {
+                    e.printStackTrace();
+                }
+            }
+        }
+        return str;
+    }
+}
+
+
+
+
+public List<BookBaseInfoList> orderLogistics(Boolean flag){
+
+        //当天0点
+        String startTime = LocalDateTime.of(LocalDate.now(ZoneId.systemDefault()), LocalTime.of(0, 0))
+                .format(DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss"));
+        logger.info("当天0点： "+ startTime);
+        //当天中午12点
+        String noonTime = LocalDateTime.of(LocalDate.now(ZoneId.systemDefault()), LocalTime.of(12, 0))
+                .format(DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss"));
+        logger.info("当天12点： "+ startTime);
+        //昨日12点
+        String endTime =LocalDateTime.of(LocalDate.now(ZoneId.systemDefault()),LocalTime.of(12,0)).minusDays(1)
+                .format(DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss"));
+        logger.info("昨日12点： "+ endTime);
+
+        if (flag){
+            List<BookBaseInfoList> orderPushListMidday = orderMapper.middayBookBaseInfoList(startTime,noonTime);
+            return orderPushListMidday;
+        }else {
+            List<BookBaseInfoList> orderPushListNight = orderMapper.nightBookBaseInfoList(endTime,startTime);
+            return orderPushListNight;
+        }
+    }
+
+
+
+
+
+
+
+
+
+
